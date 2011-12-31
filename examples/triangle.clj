@@ -138,11 +138,13 @@
 ;; where length = 3.0 and offset = 0.0
 ;; using an assload of recursion
 
+
 (defn phrase-timings [phrase offset length]
   (let
       [beat-length (/ length (count phrase))]
       (map
        (fn [note offset]
+         
          [note offset beat-length]
          )
        phrase
@@ -150,9 +152,23 @@
        ))
   )
 
-(defn play-phrase [phrase scale metro]
+(defn phrase-to-playable [phrase offset length scale root]
+  (phrase-timings (degrees->pitches phrase scale root) offset length )
+  )
+
+(defn play-phrase [phrase metro]
   (let
       [start (metro)]
-    (at )
+    (doall
+        (map
+         (fn [[note offset duration]]
+           
+           (at (metro (+ offset start))
+               (organ-cornet :freq (midi->hz  note) :dur duration)
+               ))
+         (remove #(nil? (first %))
+                 (phrase-to-playable phrase 0.0 4.0 :major :C3 ))
+         ))
    )
   )
+
