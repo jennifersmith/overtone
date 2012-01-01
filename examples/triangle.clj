@@ -95,13 +95,6 @@
 ;;(stop)
 
 ;; some limitations here... 
-(def int->degree
-  (zipmap (range 1 8) [:i :ii :iii :iv :v :vi :vii] )
-  )
-(defn transpose [note amount]
-  (let
-      [new-note (+ amount (degree->int note))]
-      (int->degree (mod new-note 7))))
 ;;Rapidly play the principal note, the note below it, then return to
 ;;the principal note for the remaining duration. In much music, the
 ;;mordent begins on the auxiliary note, and the alternation between
@@ -112,22 +105,73 @@
 (defn lower-mordent [principal lower]
   [
    [[
-     [principal lower]
-     principal ;; no more notes means a tie.. i think
+     [ [principal lower]
+       principal]
      ]
+     :tie
      ]
+     :tie
    ]
   )
+
+;; this might be a bit hard. Going for duration of whole interval
+(defn glissando [chord]
+  
+  (fn [offset length]
+    (let
+        [note-length (/ length (count chord))]
+     (map (fn [note offset length]
+            [note offset length]
+            ) chord
+              (iterate #(+ note-length %) offset)
+              (iterate #(- % note-length ) length )
+              ))
+    )
+  )
 ;; intro - beating in quavers
-(def tocatta-intro-phrase-1
+(def toccata-intro-phrase-1
+  (let [_ nil]
+    [ [:D4 [
+         (lower-mordent :v :iv) ;; quaver = 1
+         [_ [ :iv :iii]]
+         [[:ii :i] :vii#-]
+         [:i _]
+         [_]]]])
+  )
+(def toccata-intro-phrase-2
+  (let [_ nil]
+    [ [:D3  [
+               (lower-mordent :v :iv)
+               [_ :ii]
+               [:iii :vii#-]
+               [:i]
+               ]]]
+    )
+  )
+;; now 1 beat = crotchet
+(def toccata-intro-phrase-3
   (let [_ nil]
     [
-     (lower-mordent :v :iv) ;; quaver = 1
-     [_ [ :iv :iii]]
-     [[:ii :i] :vii-]
-     [:i _]
-     [_]])
-  )
+     [:D2 [
+           :i
+           :tie
+           :tie
+           :tie
+           ]]
+     [:D3
+      [
+       (glissando
+        :D3
+        [
+         :vii#-
+         :ii
+         :iv
+         :vi
+         :vii#
+         :ii+]
+        )]]]
+    
+    ))
 
 ;; phrase is a tree representing the notes to be played...
 ;; this just flattens it into a series of tuples - note, start, dur
@@ -135,25 +179,102 @@
 ;; so [:i :v [:i :v]] becomes
 ;; [[:i 0.0 1.0] [:v 2.0 1.0] [:i 3.0 0.5] [:v 3.5 0.5]]
 ;; [:i :v :ii] becomes [[:i 0.0 1.0] [:v 1.0 1.0] [:ii [2.0 1.0]]]
+;; [:i :v :tie] becomes [[:i 0.0 1.0] [:v 1.0 2.0] etc
+;; maybe some tests would be good here... also tests to figure
+;; out whether we break with stupidly divided bars
 ;; where length = 3.0 and offset = 0.0
 ;; using an assload of recursion
-
-
-(defn phrase-timings [phrase offset length]
-  (let
-      [beat-length (/ length (count phrase))]
-      (map
-       (fn [note offset]
-         
-         [note offset beat-length]
+(defmacro dbg [x] `(let [x# ~x] (println '~x "=" x#) x#))
+;; awkward
+(defn tie [note remaining]
+  [
+   (first note)
+   (second note)
+   (+ (last note) (remaining note))
+   ]
+  )
+(defn make-ties [exploded-phrase ]
+  (loop
+      [
+       current-note (first exploded-phrase)
+       [next-note & remaining-notes] (rest exploded-phrase)
+       result []
+       ]
+    (if (nil? next-note)
+      (conj result current-note)
+      (if (= :tie (first next-note))
+        (recur
+         [
+          (first current-note)
+          (second current-note)
+          (+ (last current-note) (last next-note) )
+          ]
+         remaining-notes
+         result
          )
-       phrase
-       (iterate #(+ beat-length %) offset )
-       ))
+        (recur
+         next-note
+         remaining-notes
+         (conj result current-note)
+         )
+        )
+      )
+   ))
+(defn phrase-timings [phrase offset length]
+  (make-ties
+   (let
+       [beat-length (/ length (count phrase))]
+     (mapcat
+      (fn [note-or-subphrase offset]
+        (cond
+         (coll? note-or-subphrase)
+         (phrase-timings note-or-subphrase offset beat-length)
+         (fn? note-or-subphrase)
+         (note-or-subphrase offset beat-length)
+         :else
+          [[note-or-subphrase offset beat-length]])
+        )
+      phrase
+      (iterate #(+ beat-length %) offset )
+      )))
   )
 
 (defn phrase-to-playable [phrase offset length scale root]
-  (phrase-timings (degrees->pitches phrase scale root) offset length )
+  (let
+      [root (note root)]
+      (map
+       (fn [[degree start dur]]
+         [ 
+          (midi->hz (+ root (degree->interval degree scale )) )
+          start
+          dur
+          ])
+       (remove #(nil? (first %))
+               (phrase-timings phrase offset length))))
+  )
+
+(defn phrase-to-playable-2 [phrases offset length ]
+  (mapcat
+   (fn [[root phrase]]
+     (phrase-to-playable phrase offset length :minor root)
+     )
+   phrases
+   )
+  )
+
+(def toccata-intro
+  (concat
+   (phrase-to-playable-2 toccata-intro-phrase-1 0.0 4.0)
+   (phrase-to-playable-2 toccata-intro-phrase-1 0.0 4.0)
+   ;; faking a paused rest by starting a little later
+   (phrase-to-playable-2 toccata-intro-phrase-2 5.0 4.0 )
+   (phrase-to-playable-2 toccata-intro-phrase-2 5.0 4.0 )
+   ;; another paused rest
+   (phrase-to-playable-2 toccata-intro-phrase-1 10.0 4.0 )
+   (phrase-to-playable-2 toccata-intro-phrase-1 10.0 4.0 )
+   ;; and another longer rest then longer bars. Also got two hands here
+   (phrase-to-playable-2  toccata-intro-phrase-3 16.0 8.0 )
+   )
   )
 
 (defn play-phrase [phrase metro]
@@ -164,10 +285,9 @@
          (fn [[note offset duration]]
            
            (at (metro (+ offset start))
-               (organ-cornet :freq (midi->hz  note) :dur duration)
+               (organ-cornet :freq note :dur duration)
                ))
-         (remove #(nil? (first %))
-                 (phrase-to-playable phrase 0.0 4.0 :major :C3 ))
+         phrase
          ))
    )
   )
